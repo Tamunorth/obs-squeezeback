@@ -1,0 +1,8 @@
+build/
+*.dll
+*.lib
+*.exp
+*.obj
+*.pdb
+*.exe
+generate_lib.bat

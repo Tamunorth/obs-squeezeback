@@ -1,0 +1,265 @@
+/*
+ * squeezeback.effect - GPU shader for DVE squeezeback transition
+ *
+ * Source A (current scene) scales down and slides to a corner.
+ * Source B (next scene) pushes in with counter-motion.
+ * Both sources move in coordinated opposition for a physical push feel.
+ */
+
+/* ── Uniforms ── */
+
+uniform float4x4 ViewProj;
+
+uniform texture2d tex_a;          /* Source A: current scene (will squeeze) */
+uniform texture2d tex_b;          /* Source B: next scene (pushes in) */
+
+uniform float  progress;          /* 0.0 to 1.0, pre-eased from C side */
+uniform float  final_scale;       /* target scale, e.g. 0.30 */
+uniform float  padding;           /* pixels from screen edge */
+uniform float2 resolution;        /* canvas width, height in pixels */
+uniform int    position;          /* squeeze_position_t enum */
+uniform float  push_intensity;    /* 0.0 = static, 1.0 = aggressive push */
+
+/* Border */
+uniform bool   border_enabled;
+uniform float  border_width;      /* pixels */
+uniform float4 border_color;
+
+/* Rounded corners */
+uniform float  corner_radius;     /* pixels */
+
+/* Shadow */
+uniform bool   shadow_enabled;
+uniform float4 shadow_color;
+uniform float2 shadow_offset;     /* pixels */
+uniform float  shadow_blur;       /* blur radius in pixels */
+
+/* ── Sampler ── */
+
+sampler_state texSampler {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+/* ── Vertex shader ── */
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v)
+{
+	VertData o;
+	o.pos = mul(float4(v.pos.xyz, 1.0), ViewProj);
+	o.uv  = v.uv;
+	return o;
+}
+
+/* ── Helper: compute push direction from position enum ── */
+
+float2 get_push_direction(int pos)
+{
+	/* Push direction = opposite of where A is going.
+	 * If A goes to top-right, B pushes from bottom-left. */
+	if (pos == 0) return float2(-1.0,  1.0);  /* TR: push from BL */
+	if (pos == 1) return float2( 1.0,  1.0);  /* TL: push from BR */
+	if (pos == 2) return float2(-1.0, -1.0);  /* BR: push from TL */
+	if (pos == 3) return float2( 1.0, -1.0);  /* BL: push from TR */
+	if (pos == 4) return float2( 0.0,  1.0);  /* TC: push from bottom */
+	if (pos == 5) return float2( 0.0, -1.0);  /* BC: push from top */
+	return float2(0.0, 0.0);                  /* Center: no directional push */
+}
+
+/* ── Helper: compute target anchor for each position ── */
+
+float2 get_target_anchor(int pos, float2 pad_norm, float scale)
+{
+	float hs = scale * 0.5; /* half-scale */
+
+	if (pos == 0) /* Top Right */
+		return float2(1.0 - pad_norm.x - hs, pad_norm.y + hs);
+	if (pos == 1) /* Top Left */
+		return float2(pad_norm.x + hs, pad_norm.y + hs);
+	if (pos == 2) /* Bottom Right */
+		return float2(1.0 - pad_norm.x - hs, 1.0 - pad_norm.y - hs);
+	if (pos == 3) /* Bottom Left */
+		return float2(pad_norm.x + hs, 1.0 - pad_norm.y - hs);
+	if (pos == 4) /* Top Center */
+		return float2(0.5, pad_norm.y + hs);
+	if (pos == 5) /* Bottom Center */
+		return float2(0.5, 1.0 - pad_norm.y - hs);
+
+	/* Center */
+	return float2(0.5, 0.5);
+}
+
+/* ── Helper: signed distance to rounded rectangle ── */
+
+float sdf_rounded_rect(float2 p, float2 center, float2 half_size, float radius)
+{
+	float2 d = abs(p - center) - half_size + radius;
+	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
+}
+
+/* ── Pixel shader ── */
+
+float4 PSSqueezeback(VertData v) : TARGET
+{
+	float2 uv = v.uv;
+
+	/* ────────────────────────────────────
+	 * TIMING: squeeze animation uses first 60% of progress,
+	 * then HOLDS the L-shape for the remaining 40%.
+	 * This lets the viewer see the PiP result before OBS cuts.
+	 * ──────────────────────────────────── */
+	float squeeze_end = 0.6;
+	float anim_t = saturate(progress / squeeze_end); /* 0->1 during squeeze phase */
+
+	/* At progress = 0, show pure Source A fullscreen */
+	if (progress < 0.001) {
+		return tex_a.Sample(texSampler, uv);
+	}
+
+	/* ────────────────────────────────────
+	 * SOURCE A: Scale down + slide to corner
+	 * ──────────────────────────────────── */
+
+	/* Current scale: 1.0 (fullscreen) -> final_scale over the squeeze phase */
+	float current_scale = lerp(1.0, final_scale, anim_t);
+
+	/* Padding in normalized coords */
+	float2 pad_norm = float2(padding / resolution.x,
+	                         padding / resolution.y);
+
+	/* Target anchor for the chosen corner */
+	float2 target_anchor = get_target_anchor(position, pad_norm,
+	                                         final_scale);
+
+	/* Rectangle size (maintains 16:9 aspect) */
+	float aspect = resolution.x / resolution.y;
+	float rect_w = current_scale;
+	float rect_h = current_scale;
+
+	/* Interpolate center: screen center -> target anchor */
+	float2 screen_center = float2(0.5, 0.5);
+	float2 current_center = lerp(screen_center, target_anchor, anim_t);
+
+	/* Rectangle bounds */
+	float2 half_size = float2(rect_w, rect_h) * 0.5;
+	float2 rect_min = current_center - half_size;
+	float2 rect_max = current_center + half_size;
+
+	/* Corner radius in normalized coords (relative to shorter axis) */
+	float min_dim = min(resolution.x, resolution.y);
+	float radius_norm = corner_radius / min_dim;
+	/* Scale the radius with the rectangle so it stays proportional */
+	float scaled_radius = radius_norm * (current_scale < 1.0
+	                      ? min(current_scale * 2.0, 1.0) : 1.0);
+
+	/* SDF for Source A rectangle */
+	float dist_a = sdf_rounded_rect(uv, current_center, half_size,
+	                                 scaled_radius);
+
+	/* Convert pixel units to normalized for border/shadow */
+	float px_norm = 1.0 / min_dim;
+	float border_norm = border_width * px_norm;
+
+	/* ────────────────────────────────────
+	 * SOURCE B: Push counter-motion (only during squeeze phase)
+	 * ──────────────────────────────────── */
+
+	/* Push direction: opposite of A's travel */
+	float2 push_dir = get_push_direction(position);
+
+	/* B starts slightly zoomed out and offset, settles to normal */
+	float b_anim = saturate(progress / squeeze_end);
+	float b_scale = lerp(1.0 - (push_intensity * 0.08), 1.0, b_anim);
+	float2 b_offset = push_dir * push_intensity * 0.04 * (1.0 - b_anim);
+
+	/* Compute B's UV with inverse scale and offset */
+	float2 b_uv = (uv - 0.5) / b_scale + 0.5 - b_offset;
+	b_uv = clamp(b_uv, float2(0.0, 0.0), float2(1.0, 1.0));
+
+	/* ────────────────────────────────────
+	 * SHADOW (drawn behind Source A)
+	 * ──────────────────────────────────── */
+
+	float shadow_alpha = 0.0;
+	if (shadow_enabled && anim_t > 0.01) {
+		float2 shadow_off_norm = float2(shadow_offset.x * px_norm,
+		                                shadow_offset.y * px_norm);
+		float shadow_blur_norm = shadow_blur * px_norm;
+
+		float dist_shadow = sdf_rounded_rect(
+			uv, current_center + shadow_off_norm,
+			half_size + shadow_blur_norm * 0.5,
+			scaled_radius);
+
+		/* Soft falloff for shadow */
+		shadow_alpha = 1.0 - smoothstep(-shadow_blur_norm,
+		                                 shadow_blur_norm * 0.5,
+		                                 dist_shadow);
+		shadow_alpha *= shadow_color.w * min(anim_t * 2.0, 1.0);
+	}
+
+	/* ────────────────────────────────────
+	 * COMPOSITING: L-shape layout
+	 *
+	 * Layer order (back to front):
+	 * 1. Source B fills the full screen (the "L" area)
+	 * 2. Shadow (if enabled)
+	 * 3. Border (if enabled)
+	 * 4. Source A in the corner (the squeezed rectangle)
+	 * ──────────────────────────────────── */
+
+	/* Background: Source B */
+	float4 color_b = tex_b.Sample(texSampler, b_uv);
+
+	/* Anti-aliased edge (1px feather) */
+	float aa = px_norm;
+
+	/* Source A mask (with anti-aliasing via SDF) */
+	float inside_a_mask = 1.0 - smoothstep(-aa, aa, dist_a);
+
+	/* Border mask: ring around Source A */
+	float border_mask = 0.0;
+	if (border_enabled && anim_t > 0.05) {
+		float dist_border = sdf_rounded_rect(
+			uv, current_center,
+			half_size + border_norm,
+			scaled_radius + border_norm);
+		border_mask = (1.0 - smoothstep(-aa, aa, dist_border))
+		              * (1.0 - inside_a_mask);
+	}
+
+	/* Sample Source A with mapped UVs */
+	float2 a_uv = (uv - rect_min) / (rect_max - rect_min);
+	float4 color_a = tex_a.Sample(texSampler, clamp(a_uv,
+	                              float2(0.0, 0.0), float2(1.0, 1.0)));
+
+	/* Composite: B background -> shadow -> border -> A rectangle */
+	float4 result = color_b;
+
+	if (shadow_enabled) {
+		result = lerp(result, float4(shadow_color.rgb, 1.0),
+		              shadow_alpha);
+	}
+
+	result = lerp(result, border_color, border_mask);
+	result = lerp(result, color_a, inside_a_mask);
+
+	return result;
+}
+
+/* ── Technique ── */
+
+technique Squeezeback
+{
+	pass
+	{
+		vertex_shader = VSDefault(v);
+		pixel_shader  = PSSqueezeback(v);
+	}
+}
