@@ -48,6 +48,45 @@ if not exist "build\obs-lib\obs.lib" (
     )
 )
 
+:: ── Generate frontend API import library if needed ──
+if not exist "build\obs-lib\obs-frontend-api.lib" (
+    echo Generating obs-frontend-api.lib...
+    dumpbin /exports "%OBS_DIR%\bin\64bit\obs-frontend-api.dll" > "build\obs-lib\frontend_exports_raw.txt"
+
+    echo LIBRARY obs-frontend-api > "build\obs-lib\obs-frontend-api.def"
+    echo EXPORTS >> "build\obs-lib\obs-frontend-api.def"
+    for /f "tokens=1,2,3,4" %%A in ('findstr /r "^[ ][ ]*[0-9]" "build\obs-lib\frontend_exports_raw.txt"') do (
+        if not "%%D"=="" echo     %%D >> "build\obs-lib\obs-frontend-api.def"
+    )
+
+    lib /def:"build\obs-lib\obs-frontend-api.def" /out:"build\obs-lib\obs-frontend-api.lib" /machine:x64 >nul
+    if exist "build\obs-lib\obs-frontend-api.lib" (
+        echo obs-frontend-api.lib created successfully.
+    ) else (
+        echo ERROR: Failed to create obs-frontend-api.lib
+        exit /b 1
+    )
+)
+
+:: ── Find Qt6 ──
+set "QT6_DIR="
+if exist "C:\Qt\6.7.0\msvc2019_64" set "QT6_DIR=C:\Qt\6.7.0\msvc2019_64"
+if not defined QT6_DIR (
+    if exist "C:\Qt\6.7.0\msvc2022_64" set "QT6_DIR=C:\Qt\6.7.0\msvc2022_64"
+)
+if not defined QT6_DIR (
+    for /f "tokens=*" %%i in ('dir /b /ad "C:\Qt\6.*" 2^>nul') do (
+        for /f "tokens=*" %%j in ('dir /b /ad "C:\Qt\%%i\msvc*_64" 2^>nul') do (
+            set "QT6_DIR=C:\Qt\%%i\%%j"
+        )
+    )
+)
+if not defined QT6_DIR (
+    echo ERROR: Qt6 not found. Install via: pip install aqtinstall ^&^& aqt install-qt windows desktop 6.7.0 win64_msvc2019_64 -O C:\Qt
+    exit /b 1
+)
+echo Found Qt6 at: %QT6_DIR%
+
 :: ── Find CMake ──
 set "CMAKE_EXE="
 where cmake >nul 2>&1 && set "CMAKE_EXE=cmake"
@@ -63,7 +102,7 @@ echo Using CMake: %CMAKE_EXE%
 :: ── Configure ──
 echo.
 echo Configuring...
-"%CMAKE_EXE%" -S . -B build -G "Visual Studio 17 2022" -A x64 -DOBS_DIR="%OBS_DIR%" -Wno-dev
+"%CMAKE_EXE%" -S . -B build -G "Visual Studio 17 2022" -A x64 -DOBS_DIR="%OBS_DIR%" -DCMAKE_PREFIX_PATH="%QT6_DIR%" -Wno-dev
 if errorlevel 1 (
     echo ERROR: CMake configuration failed.
     exit /b 1

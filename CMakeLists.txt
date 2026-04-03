@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(obs-squeezeback VERSION 1.0.0 LANGUAGES C)
+project(obs-squeezeback VERSION 1.0.0 LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_AUTOMOC ON)
 
 set(PLUGIN_NAME "obs-squeezeback")
 
@@ -86,6 +90,23 @@ if(NOT EXISTS "${OBS_SDK_DIR}/libobs/obs-module.h")
     message(STATUS "OBS headers extracted to ${OBS_SDK_DIR}")
 endif()
 
+# Copy frontend API header from OBS source
+set(OBS_FRONTEND_HEADER "${OBS_SDK_DIR}/obs-frontend-api.h")
+if(NOT EXISTS "${OBS_FRONTEND_HEADER}")
+    set(_frontend_src "${CMAKE_BINARY_DIR}/obs-src-extract/obs-studio-${OBS_VERSION}/frontend/api/obs-frontend-api.h")
+    if(EXISTS "${_frontend_src}")
+        file(COPY "${_frontend_src}" DESTINATION "${OBS_SDK_DIR}")
+        message(STATUS "Copied obs-frontend-api.h to SDK dir")
+    else()
+        message(WARNING "obs-frontend-api.h not found in OBS source")
+    endif()
+endif()
+
+# ── Find Qt6 ──
+
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
+message(STATUS "Found Qt6 at: ${Qt6_DIR}")
+
 # ── Generate import library from obs.dll ──
 
 set(OBS_LIB_DIR "${CMAKE_BINARY_DIR}/obs-lib")
@@ -125,6 +146,38 @@ if(MSVC AND NOT EXISTS "${OBS_LIB_DIR}/obs.lib")
         )
     endif()
 
+    # Also generate obs-frontend-api.lib
+    if(NOT EXISTS "${OBS_LIB_DIR}/obs-frontend-api.lib")
+        execute_process(
+            COMMAND ${DUMPBIN_EXE} /exports "${OBS_DIR}/bin/64bit/obs-frontend-api.dll"
+            OUTPUT_FILE "${OBS_LIB_DIR}/frontend_exports.txt"
+            ERROR_QUIET
+        )
+
+        file(STRINGS "${OBS_LIB_DIR}/frontend_exports.txt" FE_EXPORT_LINES)
+        set(FE_DEF_CONTENT "LIBRARY obs-frontend-api\nEXPORTS\n")
+        foreach(LINE ${FE_EXPORT_LINES})
+            if(LINE MATCHES "^[ \t]+[0-9]+[ \t]+[0-9A-Fa-f]+[ \t]+[0-9A-Fa-f]+[ \t]+([^ \t]+)")
+                string(APPEND FE_DEF_CONTENT "    ${CMAKE_MATCH_1}\n")
+            endif()
+        endforeach()
+
+        file(WRITE "${OBS_LIB_DIR}/obs-frontend-api.def" "${FE_DEF_CONTENT}")
+
+        execute_process(
+            COMMAND ${LIB_EXE} /def:"${OBS_LIB_DIR}/obs-frontend-api.def"
+                /out:"${OBS_LIB_DIR}/obs-frontend-api.lib" /machine:x64
+            WORKING_DIRECTORY "${OBS_LIB_DIR}"
+            ERROR_QUIET
+        )
+
+        if(EXISTS "${OBS_LIB_DIR}/obs-frontend-api.lib")
+            message(STATUS "Generated obs-frontend-api.lib")
+        else()
+            message(WARNING "Could not generate obs-frontend-api.lib")
+        endif()
+    endif()
+
     if(NOT EXISTS "${OBS_LIB_DIR}/obs.lib")
         message(WARNING
             "Could not auto-generate obs.lib.\n"
@@ -141,6 +194,8 @@ add_library(${PLUGIN_NAME} MODULE
     src/plugin-main.c
     src/squeezeback-transition.c
     src/squeezeback-filter.c
+    src/squeezeback-dock.cpp
+    src/squeezeback-dock-bridge.h
 )
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
@@ -149,12 +204,20 @@ target_include_directories(${PLUGIN_NAME} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
-# Link to OBS
+# Link to OBS + frontend API + Qt6
 if(EXISTS "${OBS_LIB_DIR}/obs.lib")
     target_link_libraries(${PLUGIN_NAME} PRIVATE "${OBS_LIB_DIR}/obs.lib")
 else()
     target_link_libraries(${PLUGIN_NAME} PRIVATE "${OBS_DIR}/bin/64bit/obs.dll")
 endif()
+
+if(EXISTS "${OBS_LIB_DIR}/obs-frontend-api.lib")
+    target_link_libraries(${PLUGIN_NAME} PRIVATE "${OBS_LIB_DIR}/obs-frontend-api.lib")
+else()
+    target_link_libraries(${PLUGIN_NAME} PRIVATE "${OBS_DIR}/bin/64bit/obs-frontend-api.dll")
+endif()
+
+target_link_libraries(${PLUGIN_NAME} PRIVATE Qt6::Widgets)
 
 set_target_properties(${PLUGIN_NAME} PROPERTIES
     C_STANDARD 11

@@ -1,4 +1,5 @@
 #include <obs-module.h>
+#include "squeezeback-dock-bridge.h"
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-squeezeback", "en-US")
@@ -45,9 +46,17 @@ bool obs_module_load(void)
 		}
 	}
 
+	/* Register dock panel */
+	squeezeback_dock_init();
+
 	blog(LOG_INFO,
-	     "[squeezeback] Plugin loaded: transition + filter + hotkey");
+	     "[squeezeback] Plugin loaded: transition + filter + hotkey + dock");
 	return true;
+}
+
+void obs_module_unload(void)
+{
+	squeezeback_dock_destroy();
 }
 
 const char *obs_module_description(void)

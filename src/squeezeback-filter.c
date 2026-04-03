@@ -1,4 +1,5 @@
 #include "squeezeback-filter.h"
+#include "squeezeback-dock-bridge.h"
 
 /* Global pointer to the most recently activated filter instance.
  * Used by the global hotkey to find which filter to toggle. */
@@ -341,20 +342,6 @@ static void sqf_do_toggle(struct squeezeback_filter_data *f)
 	     f->duration, f->delay);
 }
 
-static bool sqf_recapture_clicked(obs_properties_t *props, obs_property_t *p,
-				  void *data)
-{
-	UNUSED_PARAMETER(props);
-	UNUSED_PARAMETER(p);
-	struct squeezeback_filter_data *f = data;
-	detect_video_rect(f);
-	if (f->target_valid && !f->is_zoomed_out && !f->animating) {
-		vec2_set(&f->mul_val, f->target_w, f->target_h);
-		vec2_set(&f->add_val, f->target_x, f->target_y);
-	}
-	return false;
-}
-
 static bool sqf_trigger_clicked(obs_properties_t *props, obs_property_t *p,
 				void *data)
 {
@@ -410,11 +397,6 @@ static obs_properties_t *sqf_properties(void *data)
 	/* Auto-animate */
 	obs_properties_add_bool(props, S_AUTO_ANIMATE,
 				obs_module_text("AutoAnimate"));
-
-	/* Recapture layout button */
-	obs_properties_add_button2(props, "recapture",
-				   obs_module_text("RecaptureLayout"),
-				   sqf_recapture_clicked, data);
 
 	/* Toggle button */
 	obs_properties_add_button2(props, "trigger",
@@ -643,6 +625,60 @@ static enum gs_color_space sqf_color_space(void *data, size_t count,
 	struct squeezeback_filter_data *f = data;
 	obs_source_t *target = obs_filter_get_target(f->context);
 	return obs_source_get_color_space(target, count, spaces);
+}
+
+/* ──────────────────────────────────────────────
+ * Dock bridge functions
+ * ────────────────────────────────────────────── */
+
+void squeezeback_get_dock_state(struct squeezeback_dock_state *out)
+{
+	memset(out, 0, sizeof(*out));
+	if (!g_active_filter)
+		return;
+	struct squeezeback_filter_data *f = g_active_filter;
+	out->has_filter = 1;
+	out->animating = f->animating ? 1 : 0;
+	out->in_delay = f->in_delay ? 1 : 0;
+	out->is_zoomed_out = f->is_zoomed_out ? 1 : 0;
+	out->progress = f->progress;
+	out->duration = f->duration;
+	out->delay = f->delay;
+	out->delay_progress = (f->delay > 0.001f)
+				      ? (f->delay_elapsed / f->delay)
+				      : 0.0f;
+}
+
+void squeezeback_trigger_toggle(void)
+{
+	if (g_active_filter)
+		sqf_do_toggle(g_active_filter);
+}
+
+void squeezeback_set_duration(float duration)
+{
+	if (!g_active_filter)
+		return;
+	struct squeezeback_filter_data *f = g_active_filter;
+	f->duration = duration;
+	obs_data_t *settings = obs_source_get_settings(f->context);
+	if (settings) {
+		obs_data_set_double(settings, S_DURATION, (double)duration);
+		obs_data_release(settings);
+	}
+}
+
+void squeezeback_set_delay(float delay)
+{
+	if (!g_active_filter)
+		return;
+	struct squeezeback_filter_data *f = g_active_filter;
+	f->delay = delay;
+	obs_data_t *settings = obs_source_get_settings(f->context);
+	if (settings) {
+		obs_data_set_double(settings, S_DELAY, (double)delay);
+		obs_data_release(settings);
+	}
 }
 
 /* ──────────────────────────────────────────────
