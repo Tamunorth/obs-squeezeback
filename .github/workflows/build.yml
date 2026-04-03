@@ -18,23 +18,36 @@ jobs:
         shell: pwsh
         run: |
           choco install obs-studio -y --no-progress
-          # Verify OBS installed and registry entry exists
           $obsDir = (Get-ItemProperty -Path "HKLM:\SOFTWARE\OBS Studio" -ErrorAction SilentlyContinue).'(default)'
-          if (-not $obsDir) {
-            # Fallback: check common path
-            $obsDir = "C:\Program Files\obs-studio"
-          }
-          Write-Host "OBS installed at: $obsDir"
+          if (-not $obsDir) { $obsDir = "C:\Program Files\obs-studio" }
           if (-not (Test-Path "$obsDir\bin\64bit\obs.dll")) {
             Write-Error "obs.dll not found at $obsDir\bin\64bit\"
             exit 1
           }
+          Write-Host "OBS installed at: $obsDir"
           echo "OBS_DIR=$obsDir" >> $env:GITHUB_ENV
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+
+      - name: Generate import library
+        shell: cmd
+        run: |
+          mkdir build\obs-lib
+          dumpbin /exports "%OBS_DIR%\bin\64bit\obs.dll" > build\obs-lib\obs_exports_raw.txt
+          echo LIBRARY obs > build\obs-lib\obs.def
+          echo EXPORTS >> build\obs-lib\obs.def
+          for /f "tokens=1,2,3,4" %%A in ('findstr /r "^[ ][ ]*[0-9]" build\obs-lib\obs_exports_raw.txt') do (
+            if not "%%D"=="" echo     %%D >> build\obs-lib\obs.def
+          )
+          lib /def:build\obs-lib\obs.def /out:build\obs-lib\obs.lib /machine:x64
+          if not exist build\obs-lib\obs.lib (
+            echo ERROR: Failed to create obs.lib
+            exit /b 1
+          )
+          echo obs.lib created successfully.
 
       - name: Configure
         shell: pwsh
@@ -52,13 +65,13 @@ jobs:
             Write-Error "DLL not found after build"
             exit 1
           }
-          Write-Host "DLL built: $(Get-Item build\Release\obs-squeezeback.dll | Select-Object -ExpandProperty Length) bytes"
+          $size = (Get-Item build\Release\obs-squeezeback.dll).Length
+          Write-Host "DLL built: $size bytes"
 
       - name: Install Inno Setup
         shell: pwsh
         run: |
           choco install innosetup -y --no-progress
-          # Add to PATH
           $isccPath = "C:\Program Files (x86)\Inno Setup 6"
           if (-not (Test-Path "$isccPath\ISCC.exe")) {
             $isccPath = "C:\Program Files\Inno Setup 6"
@@ -74,7 +87,8 @@ jobs:
             Write-Error "Installer not created"
             exit 1
           }
-          Write-Host "Installer created: $(Get-Item dist\obs-squeezeback-1.0.0-setup.exe | Select-Object -ExpandProperty Length) bytes"
+          $size = (Get-Item dist\obs-squeezeback-1.0.0-setup.exe).Length
+          Write-Host "Installer created: $size bytes"
 
       - uses: actions/upload-artifact@v4
         with:
