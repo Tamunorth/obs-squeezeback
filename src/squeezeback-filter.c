@@ -307,8 +307,7 @@ static void sqf_defaults(obs_data_t *settings)
 /* Toggle: zoom out (reveal L-shape) or zoom in (show video fullscreen) */
 static void sqf_do_toggle(struct squeezeback_filter_data *f)
 {
-	if (!f->target_valid)
-		detect_video_rect(f);
+	detect_video_rect(f);
 	if (!f->target_valid)
 		return;
 	if (f->animating)
@@ -340,6 +339,20 @@ static void sqf_do_toggle(struct squeezeback_filter_data *f)
 	     "[Squeezeback Filter] Toggle: animating to %s (dur=%.2fs delay=%.2fs)",
 	     f->is_zoomed_out ? "zoomed-out (reveal)" : "zoomed-in (fullscreen)",
 	     f->duration, f->delay);
+}
+
+static bool sqf_recapture_clicked(obs_properties_t *props, obs_property_t *p,
+				  void *data)
+{
+	UNUSED_PARAMETER(props);
+	UNUSED_PARAMETER(p);
+	struct squeezeback_filter_data *f = data;
+	detect_video_rect(f);
+	if (f->target_valid && !f->is_zoomed_out && !f->animating) {
+		vec2_set(&f->mul_val, f->target_w, f->target_h);
+		vec2_set(&f->add_val, f->target_x, f->target_y);
+	}
+	return false;
 }
 
 static bool sqf_trigger_clicked(obs_properties_t *props, obs_property_t *p,
@@ -397,6 +410,11 @@ static obs_properties_t *sqf_properties(void *data)
 	/* Auto-animate */
 	obs_properties_add_bool(props, S_AUTO_ANIMATE,
 				obs_module_text("AutoAnimate"));
+
+	/* Recapture layout button */
+	obs_properties_add_button2(props, "recapture",
+				   obs_module_text("RecaptureLayout"),
+				   sqf_recapture_clicked, data);
 
 	/* Toggle button */
 	obs_properties_add_button2(props, "trigger",
@@ -555,6 +573,10 @@ static void sqf_activate(void *data)
 	struct squeezeback_filter_data *f = data;
 	f->render_logged = false;
 	g_active_filter = f; /* track the active filter for global hotkey */
+
+	/* Re-detect source position on every scene cut so the rect
+	 * stays current if the user moved/resized the source. */
+	detect_video_rect(f);
 
 	/* Read auto_animate directly from settings, not the struct field.
 	 * On duplicated filters, sqf_activate can fire before sqf_update
