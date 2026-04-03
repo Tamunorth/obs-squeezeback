@@ -140,6 +140,7 @@ endif()
 add_library(${PLUGIN_NAME} MODULE
     src/plugin-main.c
     src/squeezeback-transition.c
+    src/squeezeback-filter.c
 )
 
 target_include_directories(${PLUGIN_NAME} PRIVATE

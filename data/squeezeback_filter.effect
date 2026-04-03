@@ -1,0 +1,47 @@
+/*
+ * squeezeback_filter.effect - UV remap shader for zoom/crop animation
+ *
+ * mul_val: UV scale (1,1 = full scene, smaller = zoomed in)
+ * add_val: UV offset (0,0 = top-left origin, shifts the crop window)
+ *
+ * At (mul=1, add=0): full pass-through
+ * At (mul=target_size, add=target_pos): zoomed into target area
+ */
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float2 mul_val;
+uniform float2 add_val;
+
+sampler_state texSampler {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSZoom(VertData v_in)
+{
+	VertData o;
+	o.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	o.uv  = v_in.uv * mul_val + add_val;
+	return o;
+}
+
+float4 PSZoom(VertData v_in) : TARGET
+{
+	return image.Sample(texSampler, v_in.uv);
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSZoom(v_in);
+		pixel_shader  = PSZoom(v_in);
+	}
+}

@@ -95,6 +95,7 @@ if errorlevel 1 (
 if not exist "%DATA_DIR%" mkdir "%DATA_DIR%"
 if not exist "%DATA_DIR%\locale" mkdir "%DATA_DIR%\locale"
 copy /Y "data\squeezeback.effect" "%DATA_DIR%\" >nul
+copy /Y "data\squeezeback_filter.effect" "%DATA_DIR%\" >nul
 copy /Y "data\locale\en-US.ini" "%DATA_DIR%\locale\" >nul
 
 echo.
