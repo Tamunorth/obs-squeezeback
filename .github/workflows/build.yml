@@ -27,15 +27,26 @@ jobs:
           Write-Host "OBS installed at: $obsDir"
           echo "OBS_DIR=$obsDir" >> $env:GITHUB_ENV
 
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.0'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2019_64'
+          modules: 'qtwidgets'
+
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      - name: Generate import library
+      - name: Generate import libraries
         shell: cmd
         run: |
           mkdir build\obs-lib
+
+          echo --- Generating obs.lib ---
           dumpbin /exports "%OBS_DIR%\bin\64bit\obs.dll" > build\obs-lib\obs_exports_raw.txt
           echo LIBRARY obs > build\obs-lib\obs.def
           echo EXPORTS >> build\obs-lib\obs.def
@@ -49,11 +60,27 @@ jobs:
           )
           echo obs.lib created successfully.
 
+          echo --- Generating obs-frontend-api.lib ---
+          dumpbin /exports "%OBS_DIR%\bin\64bit\obs-frontend-api.dll" > build\obs-lib\frontend_exports_raw.txt
+          echo LIBRARY obs-frontend-api > build\obs-lib\obs-frontend-api.def
+          echo EXPORTS >> build\obs-lib\obs-frontend-api.def
+          for /f "tokens=1,2,3,4" %%A in ('findstr /r "^[ ][ ]*[0-9]" build\obs-lib\frontend_exports_raw.txt') do (
+            if not "%%D"=="" echo     %%D >> build\obs-lib\obs-frontend-api.def
+          )
+          lib /def:build\obs-lib\obs-frontend-api.def /out:build\obs-lib\obs-frontend-api.lib /machine:x64
+          if not exist build\obs-lib\obs-frontend-api.lib (
+            echo ERROR: Failed to create obs-frontend-api.lib
+            exit /b 1
+          )
+          echo obs-frontend-api.lib created successfully.
+
       - name: Configure
         shell: pwsh
         run: |
           cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
-            -DOBS_DIR="$env:OBS_DIR" -Wno-dev
+            -DOBS_DIR="$env:OBS_DIR" `
+            -DCMAKE_PREFIX_PATH="$env:Qt6_DIR" `
+            -Wno-dev
 
       - name: Build
         run: cmake --build build --config Release
