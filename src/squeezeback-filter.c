@@ -556,7 +556,18 @@ static void sqf_activate(void *data)
 	f->render_logged = false;
 	g_active_filter = f; /* track the active filter for global hotkey */
 
-	if (f->auto_animate) {
+	/* Read auto_animate directly from settings, not the struct field.
+	 * On duplicated filters, sqf_activate can fire before sqf_update
+	 * has loaded the correct settings into the struct. */
+	bool should_auto = f->auto_animate;
+	obs_data_t *settings = obs_source_get_settings(f->context);
+	if (settings) {
+		obs_data_set_default_bool(settings, S_AUTO_ANIMATE, true);
+		should_auto = obs_data_get_bool(settings, S_AUTO_ANIMATE);
+		obs_data_release(settings);
+	}
+
+	if (should_auto) {
 		f->needs_auto_trigger = true;
 		blog(LOG_INFO,
 		     "[Squeezeback Filter] ACTIVATE: queued auto-trigger");
