@@ -32,10 +32,25 @@ Source: "data\squeezeback_filter.effect"; DestDir: "{app}\data\obs-plugins\obs-s
 Source: "data\locale\en-US.ini"; DestDir: "{app}\data\obs-plugins\obs-squeezeback\locale"; Flags: ignoreversion
 
 [Code]
+var
+  OBSPathCache: String;
+
+function ValidateOBSDir(const Path: String): Boolean;
+begin
+  Result := FileExists(Path + '\bin\64bit\obs64.exe');
+end;
+
 function GetOBSDir(Param: String): String;
 var
   Path: String;
 begin
+  { If the user picked a folder manually during InitializeSetup, use it. }
+  if OBSPathCache <> '' then
+  begin
+    Result := OBSPathCache;
+    Exit;
+  end;
+
   { Try registry first }
   if RegQueryStringValue(HKLM, 'SOFTWARE\OBS Studio', '', Path) then
   begin
@@ -56,17 +71,52 @@ end;
 
 function InitializeSetup(): Boolean;
 var
-  OBSDir: String;
+  AutoDir: String;
+  ChosenDir: String;
 begin
-  OBSDir := GetOBSDir('');
-  if not FileExists(OBSDir + '\bin\64bit\obs64.exe') then
+  AutoDir := GetOBSDir('');
+  if ValidateOBSDir(AutoDir) then
   begin
-    MsgBox('OBS Studio was not found on this computer.' + #13#10 + #13#10 +
-           'Please install OBS Studio first, then run this installer again.', mbError, MB_OK);
+    Result := True;
+    Exit;
+  end;
+
+  { Auto-detect failed. Offer a manual browse for portable or custom installs. }
+  if MsgBox('OBS Studio was not found in the usual locations.' + #13#10 + #13#10 +
+            'If OBS is installed in a custom or portable folder, click Yes and pick its folder ' +
+            '(the one that contains bin\64bit\obs64.exe).' + #13#10 + #13#10 +
+            'Otherwise click No, install OBS Studio first, then run this installer again.',
+            mbConfirmation, MB_YESNO) <> IDYES then
+  begin
     Result := False;
     Exit;
   end;
-  Result := True;
+
+  ChosenDir := AutoDir;
+  while True do
+  begin
+    if not BrowseForFolder(
+      'Select your OBS Studio installation folder. It should contain bin\64bit\obs64.exe.',
+      ChosenDir, False) then
+    begin
+      Result := False;
+      Exit;
+    end;
+
+    if ValidateOBSDir(ChosenDir) then
+    begin
+      OBSPathCache := ChosenDir;
+      Result := True;
+      Exit;
+    end;
+
+    if MsgBox('That folder does not contain bin\64bit\obs64.exe.' + #13#10 + #13#10 +
+              'Pick a different folder?', mbConfirmation, MB_YESNO) <> IDYES then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
 end;
 
 [UninstallDelete]
